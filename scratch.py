@@ -25,8 +25,11 @@ device = t.device("cuda" if t.cuda.is_available() else "cpu")
 ### First, we need a model. 
 model = HookedTransformer.from_pretrained("pythia-410m")
 # %%
-low_to_caps = [(letter, letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"]
-caps_to_low = [(letter.upper(), letter) for letter in "abcdefghijklmnopqrstuvwxyz"]
+low_to_caps = [(letter, letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"] 
+caps_to_low =  [(letter.upper(), letter) for letter in "abcdefghijklmnopqrstuvwxyz"] 
+letter_to_caps = [(letter, letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"] + [(letter.upper(), letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"]
+letter_to_low =  [(letter.upper(), letter) for letter in "abcdefghijklmnopqrstuvwxyz"] + [(letter, letter) for letter in "abcdefghijklmnopqrstuvwxyz"]
+
 fruit_to_color = [("apple", "red"), ("banana", "yellow"), ("orange", "orange"),
                    ("strawberry", "red"), ("blueberry", "blue"), ("kiwi", "green"), ("watermelon", "green"), 
                    ("pineapple", "yellow"), ("mango", "orange"), ("peach", "orange"), ("pear", "green"), 
@@ -122,6 +125,10 @@ def test_component_hypothesis(contexts: List[Tuple[str,str]], function_token: st
 
     return (num_total, num_baseline, num_regular, num_reconstructed)
 
+def print_test_component_hypothesis_results(results: Tuple[int,int,int,List[int]]) -> None:
+    print(f"Baseline hits: {results[1]}/{results[0]}")
+    print(f"Regular hits: {results[2]}/{results[0]}")
+    print(f"Reconstructed hits: {[result for result in results[3]]}")
 
 # %%
 test_component_hypothesis(low_to_caps, arrow, model, num_contexts=1024)
@@ -130,5 +137,68 @@ test_component_hypothesis(caps_to_low, arrow, model, num_contexts=1024)
 # %%
 test_component_hypothesis(following_number, arrow, model, num_contexts=1024)
 # %%
+letter_to_low_result = test_component_hypothesis(letter_to_low, arrow, model, num_contexts=2048, len_contexts=6)
+letter_to_caps_result = test_component_hypothesis(letter_to_caps, arrow, model, num_contexts=2048, len_contexts=6)
+# %%
+def substitute_task(taskA: List[Tuple[str,str]], taskB: List[Tuple[str,str]], layer: int, function_token:str = "→", model: HookedTransformer = model, num_contexts: int = 256, len_contexts: int = 4) -> Float:
+    ### Check the tasks are the same length and have the same domains
+    if(len(taskA) != len(taskB)):
+        raise ValueError("The two tasks must have the same length")
+    
+    taskA.sort(key=lambda x: x[0])
+    taskB.sort(key=lambda x: x[0])
 
+    for i in range(len(taskA)):
+        if(taskA[i][0] != taskB[i][0]):
+            raise ValueError("The two tasks must have the same domains")
+    
+    ### Pair the tasks together
+    mixed_tasks = [(taskA[i][0],taskA[i][1],taskB[i][1]) for i in range(len(taskA))]
+    taskA_hits = 0
+    taskB_hits = 0
+    taskA_corrupted_B_hits = 0
+    taskB_corrupted_A_hits = 0
+
+    for _ in tqdm(range(num_contexts)):
+        ### Select a random context and query
+        random.shuffle(mixed_tasks)
+        taskA_context = list(map(lambda x: (x[0],x[1]), mixed_tasks[:len_contexts]))
+        taskB_context = list(map(lambda x: (x[0],x[2]), mixed_tasks[:len_contexts]))
+
+        current_query = mixed_tasks[len_contexts][0][0]
+        taskA_answer = mixed_tasks[len_contexts][1]
+        taskB_answer = mixed_tasks[len_contexts][2]
+
+        logitsA, cacheA = model.run_with_cache(t.tensor(mix_contexts_and_query(taskA_context, current_query, function_token, model)))
+        logitsB, cacheB = model.run_with_cache(t.tensor(mix_contexts_and_query(taskB_context, current_query, function_token, model)))
+
+        if(logits_to_next_token(logitsA) == taskA_answer):
+            taskA_hits += 1
+        if(logits_to_next_token(logitsB) == taskB_answer):
+            taskB_hits += 1
+        
+        layer_cacheA = cacheA[f"blocks.{layer}.hook_resid_pre"].clone()
+        layer_cacheB = cacheB[f"blocks.{layer}.hook_resid_pre"].clone()
+        layer_cacheA[0,-1,:] = cacheB[f"blocks.{layer}.hook_resid_pre"][0,-1,:]
+        layer_cacheB[0,-1,:] = cacheA[f"blocks.{layer}.hook_resid_pre"][0,-1,:]
+        
+        logitsA_with_B_corruption = model.forward(layer_cacheA, start_at_layer=layer)
+        if(logits_to_next_token(logitsA_with_B_corruption) == taskB_answer):
+            taskA_corrupted_B_hits += 1
+        logitsB_with_A_corruption = model.forward(layer_cacheB, start_at_layer=layer)
+        if(logits_to_next_token(logitsB_with_A_corruption) == taskA_answer):
+            taskB_corrupted_A_hits += 1
+        
+    return(num_contexts, taskA_hits, taskB_hits, taskA_corrupted_B_hits, taskB_corrupted_A_hits)
+
+def print_substitute_task_results(results: Tuple[int,int,int,int,int]) -> None:
+    print(f"Task A hits: {results[1]}/{results[0]}")
+    print(f"Task B hits: {results[2]}/{results[0]}")
+    print(f"Task A with B corruption hits: {results[3]}/{results[0]}")
+    print(f"Task B with A corruption hits: {results[4]}/{results[0]}")
+    
+# %%
+substitute_task_layer_13 = substitute_task(letter_to_caps, letter_to_low, 13, arrow, model, num_contexts=512, len_contexts=6)
+# %%
+substitute_task_layer_14 = substitute_task(letter_to_caps, letter_to_low, 14, arrow, model, num_contexts=2048, len_contexts=6)
 # %%

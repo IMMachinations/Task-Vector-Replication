@@ -1,0 +1,28 @@
+Results:
+Pythia 410m Initial test_component_hypothesis
+    low_to_caps 1024: 
+        Baseline: 0
+        Normal: 14
+        Layer Replacements: [14,14,14,14,14,14,14,14,14,14,13,12,15,9,2,2,2,3,0,0,0,0,0,0]
+    caps_to_low 1024:
+        Baseline: 0
+        Normal: 250
+        Layer Replacements: [250,252,249,249,247,245,237,233,232,234,237,225,280,252,14,14,2,4,2,2,3,3,3,3]
+    following_number 1024:
+        Baseline: 109
+        Normal: 290
+        Layer Replacements: [290,290,294,294,293,285,272,275,275,279,271,216,219,153,126,126,125,120,125,124,124,122,123,123]
+    letter_to_low 2048 6:
+        Baseline: 536
+        Normal: 770
+        Layer Replacements: [770, 773, 763, 765, 765, 751, 734, 735, 720, 716, 691, 669, 724, 642, 76, 74, 54, 59, 35, 33, 33, 33, 34, 34]
+    letter_to_caps 2048 6:
+        Baseline: 675
+        Normal: 192
+        Layer Replacements: [192, 193, 190, 191, 191, 181, 182, 183, 181, 177, 174, 174, 196, 162, 52, 52, 42, 47, 34, 36, 38, 36, 34, 34]
+    letter_to_caps corrupted with letter_to_low: 
+        Task A hits: 199/2048
+        Task B hits: 726/2048
+        Task A with B corruption hits: 712/2048
+        Task B with A corruption hits: 566/2048
+It seems that Pythia 410m has a layer between 13 and 14 where the task vector is computed
