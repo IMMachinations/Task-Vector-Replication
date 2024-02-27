@@ -46,14 +46,18 @@ def construct_context(pair: Tuple[str, str], function_token: str = "→") -> str
     return pair[0] + function_token + pair[1]
 def construct_query(pair: Tuple[str, str], function_token: str = "→") -> Tuple[str,str]:
     return (pair[0] + function_token, pair[1])
-def mix_contexts_and_query(contexts : List[Tuple[str,str]], query: str, function_token: str = "→", model: HookedTransformer = model) -> List[int]:
+def mix_contexts_and_query(contexts : List[Tuple[str,str]], query: str, function_token: str = "→", seperator_token: str = None, model: HookedTransformer = model) -> List[int]:
     function_token_int = model.to_single_token(function_token)
-    token_list = []
+    token_list = [0]
 
     for context in contexts:
         token_list.append(model.to_single_token(context[0]))
         token_list.append(function_token_int)
         token_list.append(model.to_single_token(context[1]))
+        if(seperator_token is not None):
+            token_list.append(model.to_single_token(seperator_token))
+    if(seperator_token is not None):
+        token_list.append(model.to_single_token(seperator_token))
     return token_list + [model.to_single_token(query), model.to_single_token(function_token)]
 # %%
 low_to_caps_strings = [construct_context(pair, arrow) for pair in low_to_caps]
@@ -202,3 +206,47 @@ substitute_task_layer_13 = substitute_task(letter_to_caps, letter_to_low, 13, ar
 # %%
 substitute_task_layer_14 = substitute_task(letter_to_caps, letter_to_low, 14, arrow, model, num_contexts=2048, len_contexts=6)
 # %%
+### PART 2: Function Vectors in LLMS
+def generate_mean_activation(contexts: List[Tuple[str,str]], query: str, function_token: str, model: HookedTransformer = model, num_contexts: int = 1024, len_contexts: int = 4) -> Float:
+    
+    shuffled_context = contexts.copy()  
+    num_total = 0
+    activations = t.zeros((model.cfg.n_layers, model.cfg.n_heads, model.cfg.d_model))
+    model.cfg.use_attn_results = True
+    for _ in tqdm(range(num_contexts)):
+        num_total += 1
+        random.shuffle(shuffled_context)
+        current_context = shuffled_context[:len_contexts]
+        current_query = shuffled_context[len_contexts]
+        current_answer = shuffled_context[len_contexts][1]
+
+        normal_tokens = t.tensor(mix_contexts_and_query(current_context, current_query[0], function_token, model))
+        _, normal_cache = model.run_with_cache(normal_tokens)
+        for i in range(model.cfg.n_layers):
+            activations[i,:,:] += normal_cache[f"blocks.{i}.attn.attn_results"][0,-1,:,:] # maybe [0,:,-1,:]
+    
+    return activations/num_contexts
+
+def gather_head_activations_to_layers(mean_head_activations: Tensor) -> Tensor:
+    return mean_head_activations.mean(1)
+
+def layer_addition_hook(hook_value: Tensor, hook: HookPoint, vector: Tensor) -> Tensor:
+    hook_value[0,-1,:] = hook_value[0,-1,:] + vector
+    return hook_value 
+    
+
+def apply_layered_vectors_to_zero_shot(layered_vectors: Tensor, contexts: List[Tuple[str,str]], function_token: str, model: HookedTransformer = model) -> Float:
+    layer_sums = [0 * model.cfg.n_layers]
+    hook_functions = [lambda hook_value, hook : layer_addition_hook(hook_value, hook, vector) for vector in layered_vectors]
+    for context in contexts:
+        
+        tokens = t.tensor([0, model.to_single_token(context[0]), model.to_single_token(function_token)])
+        for i in range(model.cfg.n_layers):
+            logits = model.run_with_hooks(tokens, fwd_hooks=[(f"blocks.{i}.attn.attn_results", hook_functions[i])])
+            if(logits_to_next_token(logits) == model.to_single_token(context[1])):
+                layer_sums[i] += 1
+
+    return [(1.0 * layer_sum) / len(contexts) for layer_sum in layer_sums]
+            
+        #print(logits_to_next_token(logits))
+        
