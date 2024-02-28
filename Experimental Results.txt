@@ -20,7 +20,7 @@ Pythia 410m Initial test_component_hypothesis
         Baseline: 675
         Normal: 192
         Layer Replacements: [192, 193, 190, 191, 191, 181, 182, 183, 181, 177, 174, 174, 196, 162, 52, 52, 42, 47, 34, 36, 38, 36, 34, 34]
-    letter_to_caps corrupted with letter_to_low: 
+    letter_to_caps corrupted with letter_to_low layer 14 survey length 6 : 
         Task A hits: 199/2048
         Task B hits: 726/2048
         Task A with B corruption hits: 712/2048

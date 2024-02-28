@@ -59,6 +59,23 @@ def mix_contexts_and_query(contexts : List[Tuple[str,str]], query: str, function
     if(seperator_token is not None):
         token_list.append(model.to_single_token(seperator_token))
     return token_list + [model.to_single_token(query), model.to_single_token(function_token)]
+def mix_multitoken_contexts_and_query(contexts : List[Tuple[str,str]], query: str, function_token: str = "→", seperator_token: str = None, model: HookedTransformer = model) -> List[int]:
+    function_token_list = model.to_tokens(function_token,prepend_bos=False).tolist()
+    token_list = [0]
+    has_seperator = seperator_token is not None
+    if(has_seperator):
+        seperator_tokens = model.to_tokens(seperator_token,prepend_bos=False).tolist()
+
+    for context in contexts:
+        token_list += model.to_tokens(context[0], prepend_bos=False).tolist()
+        token_list += function_token_list
+        token_list += model.to_tokens(context[1], prepend_bos=False).tolist()
+        if(has_seperator):
+            token_list += seperator_tokens
+    if(has_seperator):
+        token_list += seperator_tokens
+    return token_list + model.to_tokens(query,prepend_bos=False).tolist() + function_token_list
+
 # %%
 low_to_caps_strings = [construct_context(pair, arrow) for pair in low_to_caps]
 low_to_caps_queries = [construct_query(pair, arrow) for pair in low_to_caps]
@@ -247,6 +264,9 @@ def apply_layered_vectors_to_zero_shot(layered_vectors: Tensor, contexts: List[T
                 layer_sums[i] += 1
 
     return [(1.0 * layer_sum) / len(contexts) for layer_sum in layer_sums]
-            
+
+
         #print(logits_to_next_token(logits))
-        
+
+def identify_probability_of_token(logits: Tensor, token: str, model: HookedTransformer = model) -> Float:
+    return t.nn.functional.softmax(logits[0,-1,:])[model.to_single_token(token)]
