@@ -23,7 +23,7 @@ import random
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 # %%
 ### First, we need a model. 
-model = HookedTransformer.from_pretrained("pythia-410m")
+model = HookedTransformer.from_pretrained("pythia-410m", device=device)
 # %%
 low_to_caps = [(letter, letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"] 
 caps_to_low =  [(letter.upper(), letter) for letter in "abcdefghijklmnopqrstuvwxyz"] 
@@ -77,10 +77,9 @@ def mix_multitoken_contexts_and_query(contexts : List[Tuple[str,str]], query: st
     return token_list + model.to_tokens(query,prepend_bos=False).tolist()[0] + function_token_list
 ### PART 2: Function Vectors in LLMS
 def generate_mean_activation(contexts: List[Tuple[str,str]], function_token: str, seperator_token: str = ",", model: HookedTransformer = model, num_contexts: int = 1024, len_contexts: int = 4) -> Float:
-    
     shuffled_context = contexts.copy()  
     num_total = 0
-    activations = t.zeros((model.cfg.n_layers, model.cfg.n_heads, model.cfg.d_model))
+    activations = t.zeros((model.cfg.n_layers, model.cfg.n_heads, model.cfg.d_model), device=device)
     previous_attn_result_value = model.cfg.use_attn_result 
     model.cfg.use_attn_result = True
     for _ in tqdm(range(num_contexts)):
@@ -125,21 +124,26 @@ def apply_layered_vectors_to_zero_shot(layered_vectors: Tensor, contexts: List[T
 
         #print(logits_to_next_token(logits))
 
+# %%
 def identify_probability_of_token(logits: Tensor, token: str, model: HookedTransformer = model) -> Float:
     return t.nn.functional.softmax(logits[0,-1,:],dim=0)[model.to_single_token(token)]
 
 def apply_layered_vectors_to_zero_shot_by_probability(layered_vectors: Tensor, contexts: List[Tuple[str,str]], function_token: str, model: HookedTransformer = model) -> Float:
-    layer_sums = t.zeros(model.cfg.n_layers)
+    layer_sums = t.zeros((model.cfg.n_layers), device=device)
     #print(layer_sums)
     hook_functions = [lambda hook_value, hook : layer_addition_hook(hook_value, hook, vector) for vector in layered_vectors]
+    first_logits = None
+    logits = None
     for context in tqdm(contexts):
-        tokens = t.tensor([0, model.to_single_token(context[0]), model.to_single_token(function_token)])
+        tokens = t.tensor([0] + model.to_tokens(context[0], prepend_bos=False).tolist()[0] +  [model.to_single_token(function_token)], device=device)
         first_logits = model.forward(tokens)
-        base_probability = identify_probability_of_token(first_logits, context[1], model)
+        base_probability = (t.nn.Softmax(dim=0)(first_logits[0,-1,:]))[model.to_tokens(context[1],prepend_bos=False)[0]]
         for i in range(model.cfg.n_layers):
             logits = model.run_with_hooks(tokens, fwd_hooks=[(f"blocks.{i}.hook_attn_out", hook_functions[i])])
-            adjusted_probability = identify_probability_of_token(logits, context[1], model)
-            layer_sums[i] += adjusted_probability - base_probability
+            adjusted_probability = (t.nn.Softmax(dim=0)(logits[0,-1,:]))[model.to_tokens(context[1],prepend_bos=False)[0]]
+            layer_sums[i] += (adjusted_probability[0] - base_probability[0])
+        #break
+        print(layer_sums.shape)
 
     return layer_sums / len(contexts)
 
@@ -152,8 +156,9 @@ mean_head_activations = generate_mean_activation(letter_to_caps, arrow, num_cont
 mean_layer_activations = gather_head_activations_to_layers(mean_head_activations)
 # %%
 layered_accuracy = apply_layered_vectors_to_zero_shot(mean_layer_activations, letter_to_caps, arrow, model)
+px.line(layered_accuracy)
 # %%
-layered_adjusted_probability = apply_layered_vectors_to_zero_shot_by_probability(mean_layer_activations, letter_to_caps, arrow, model)
+#layered_adjusted_probability = apply_layered_vectors_to_zero_shot_by_probability(mean_layer_activations, letter_to_caps, arrow, model)
 # %%
 context = letter_to_caps[0]
 tokens = t.tensor([0, model.to_single_token(context[0]), model.to_single_token(arrow)])
