@@ -23,7 +23,7 @@ import random
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 # %%
 ### First, we need a model. 
-model = HookedTransformer.from_pretrained("pythia-410m", device=device)
+model = HookedTransformer.from_pretrained("pythia-2.8b", device=device)
 # %%
 low_to_caps = [(letter, letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"] 
 caps_to_low =  [(letter.upper(), letter) for letter in "abcdefghijklmnopqrstuvwxyz"] 
@@ -97,9 +97,11 @@ def generate_mean_activation(contexts: List[Tuple[str,str]], function_token: str
     model.cfg.use_attn_result = previous_attn_result_value
     return activations/num_contexts
 
+
 def gather_head_activations_to_layers(mean_head_activations: Tensor) -> Tensor:
     return mean_head_activations.sum(1)
 
+# %%
 def layer_addition_hook(hook_value: Tensor, hook: hook_points.HookPoint, vector: Tensor) -> Tensor:
     hook_value[0,-1,:] = hook_value[0,-1,:] + vector
     return hook_value 
@@ -137,14 +139,12 @@ def apply_layered_vectors_to_zero_shot_by_probability(layered_vectors: Tensor, c
     for context in tqdm(contexts):
         tokens = t.tensor([0] + model.to_tokens(context[0], prepend_bos=False).tolist()[0] +  [model.to_single_token(function_token)], device=device)
         first_logits = model.forward(tokens)
-        base_probability = (t.nn.Softmax(dim=0)(first_logits[0,-1,:]))[model.to_tokens(context[1],prepend_bos=False)[0]]
+        base_probability = (t.nn.Softmax(dim=0)(first_logits[0,-1,:]))[model.to_tokens(context[1],prepend_bos=False)[0]].detach()
         for i in range(model.cfg.n_layers):
             logits = model.run_with_hooks(tokens, fwd_hooks=[(f"blocks.{i}.hook_attn_out", hook_functions[i])])
-            adjusted_probability = (t.nn.Softmax(dim=0)(logits[0,-1,:]))[model.to_tokens(context[1],prepend_bos=False)[0]]
-            layer_sums[i] += (adjusted_probability[0] - base_probability[0])
-        #break
-        print(layer_sums.shape)
-
+            adjusted_probability = (t.nn.Softmax(dim=0)(logits[0,-1,:]))[model.to_tokens(context[1],prepend_bos=False)[0]].detach()
+            layer_sums[i] += (adjusted_probability[0] - base_probability[0]).detach()
+        
     return layer_sums / len(contexts)
 
         #print(logits_to_next_token(logits))
@@ -156,9 +156,10 @@ mean_head_activations = generate_mean_activation(letter_to_caps, arrow, num_cont
 mean_layer_activations = gather_head_activations_to_layers(mean_head_activations)
 # %%
 layered_accuracy = apply_layered_vectors_to_zero_shot(mean_layer_activations, letter_to_caps, arrow, model)
-px.line(layered_accuracy)
+px.line(layered_accuracy, title = "Accuracy by layer of adding average activation to zero-shot pythia 2.8b toCaps task")
 # %%
-#layered_adjusted_probability = apply_layered_vectors_to_zero_shot_by_probability(mean_layer_activations, letter_to_caps, arrow, model)
+layered_adjusted_probability = apply_layered_vectors_to_zero_shot_by_probability(mean_layer_activations, letter_to_caps, arrow, model)
+px.line(layered_adjusted_probability.cpu())
 # %%
 context = letter_to_caps[0]
 tokens = t.tensor([0, model.to_single_token(context[0]), model.to_single_token(arrow)])
