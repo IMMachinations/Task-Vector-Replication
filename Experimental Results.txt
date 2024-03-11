@@ -26,3 +26,6 @@ Pythia 410m Initial test_component_hypothesis
         Task A with B corruption hits: 712/2048
         Task B with A corruption hits: 566/2048
 It seems that Pythia 410m has a layer between 13 and 14 where the task vector is computed
+
+When it comes to the second paper, it certainly seems like their formulation for a task vector is effective, at least for the "last in a list" task. 
+There is marked performance increases when adding the task vector to zero shot, from 0% top 5 accuracy to around 80% for pythia 410m.
