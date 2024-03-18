@@ -28,4 +28,6 @@ Pythia 410m Initial test_component_hypothesis
 It seems that Pythia 410m has a layer between 13 and 14 where the task vector is computed
 
 When it comes to the second paper, it certainly seems like their formulation for a task vector is effective, at least for the "last in a list" task. 
-There is marked performance increases when adding the task vector to zero shot, from 0% top 5 accuracy to around 80% for pythia 410m.
+There is marked performance increases when adding the task vector to zero shot, from 0.0015% top 5 accuracy to 76.35% on 2000 samples for pythia 410m.
+    The task was identifying the last element in a 5 task list. The list elements were US states. 
+

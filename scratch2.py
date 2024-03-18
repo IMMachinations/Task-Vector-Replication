@@ -235,6 +235,7 @@ def assemble_task_vector(mean_head_activations: Tensor, causal_indirect_effects:
     task_vector = t.zeros((model.cfg.d_model), device=device)
     for head in top_heads:
         task_vector += mean_head_activations[head[0],head[1],:]
+    return task_vector
 # %%
 def assemble_end_list_tasks(objects: List[str], num_lists: int, num_elements: int, seperator: str = ",") -> List[Tuple[str,str]]:
     end_list_tasks = []
@@ -268,7 +269,39 @@ px.imshow(causal_indirect_effects.cpu().numpy())
 # %%
 last_state_task_vector = assemble_task_vector(average_head, causal_indirect_effects, 11, 10)
 # %%
-
-logits = model.forward(mix_multitoken_contexts_and_query(last_state[:3], query=last_state[3][0], function_token=":", seperator_token="|", model=model))
+prompt = ""
+prompt += last_state[3][0] + ":"
+print(prompt)
+logits = model.forward(prompt)
 print(logits_to_next_token(logits, model=model))
+# %%
+def logits_to_next_k_tokens(k: int, logits: Tensor, model: HookedTransformer = model) -> int:
+    retval = []
+    for entry in t.topk(logits[0,-1,:], k).indices.tolist():
+        retval.append((model.to_string(entry)))
+    return retval
+for i in range(12):
+    prompt = ""
+    prompt += last_state[i][0] + ":"
+    print(prompt)
+    logits = model.forward(prompt)
+    print(logits_to_next_k_tokens(5, logits, model=model))
+    logits = model.run_with_hooks(prompt, fwd_hooks = [("blocks.11.hook_attn_out", lambda hook_value, hook : layer_addition_hook(hook_value, hook, last_state_task_vector))])
+    print(logits_to_next_k_tokens(5, logits, model=model))
+# %%
+def check_accuracy_of_task_vector(task_vector: Tensor, layer:int, contexts: List[Tuple[str,str]], topk: int = 5, model: HookedTransformer = model) -> Float:
+    baseline_correct = 0
+    task_vector_correct = 0
+    for context in tqdm(contexts):
+        prompt = context[0] + ":"
+        logits = model.forward(prompt)
+        if(context[1] in logits_to_next_k_tokens(topk, logits, model)):
+            baseline_correct += 1
+        logits = model.run_with_hooks(prompt, fwd_hooks = [(f"blocks.{layer}.hook_attn_out", lambda hook_value, hook : layer_addition_hook(hook_value, hook, task_vector))])
+        if(context[1] in logits_to_next_k_tokens(topk, logits, model)):
+            task_vector_correct += 1
+    return (1.0 * baseline_correct / len(contexts), 1.0 * task_vector_correct / len(contexts))
+
+accuracy = check_accuracy_of_task_vector(last_state_task_vector, 11, last_state)
+print(accuracy)
 # %%
