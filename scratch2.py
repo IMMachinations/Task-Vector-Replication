@@ -23,7 +23,7 @@ import random
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 # %%
 ### First, we need a model. 
-model = HookedTransformer.from_pretrained("pythia-410m", device=device)
+model = HookedTransformer.from_pretrained("gpt2-small", device=device)
 # %%
 low_to_caps = [(letter, letter.upper()) for letter in "abcdefghijklmnopqrstuvwxyz"] 
 caps_to_low =  [(letter.upper(), letter) for letter in "abcdefghijklmnopqrstuvwxyz"] 
@@ -295,13 +295,159 @@ def check_accuracy_of_task_vector(task_vector: Tensor, layer:int, contexts: List
     for context in tqdm(contexts):
         prompt = context[0] + ":"
         logits = model.forward(prompt)
-        if(context[1] in logits_to_next_k_tokens(topk, logits, model)):
+        first_answer_token = model.to_string(model.to_tokens(context[1], prepend_bos=False).tolist()[0][0])
+        if(first_answer_token in logits_to_next_k_tokens(topk, logits, model)):
             baseline_correct += 1
         logits = model.run_with_hooks(prompt, fwd_hooks = [(f"blocks.{layer}.hook_attn_out", lambda hook_value, hook : layer_addition_hook(hook_value, hook, task_vector))])
-        if(context[1] in logits_to_next_k_tokens(topk, logits, model)):
+        if(first_answer_token in logits_to_next_k_tokens(topk, logits, model)):
             task_vector_correct += 1
     return (1.0 * baseline_correct / len(contexts), 1.0 * task_vector_correct / len(contexts))
 
+def check_accuracy_of_added_task_vector(task_vector: Tensor, layer: int, contexts: List[Tuple[str,str]], topk: int = 5, model: HookedTransformer = model) -> Float:
+    task_vector_correct = 0
+    for context in contexts:
+        prompt = context[0] + ":"
+        first_answer_token = model.to_string(model.to_tokens(context[1], prepend_bos=False).tolist()[0][0])
+        logits = model.run_with_hooks(prompt, fwd_hooks = [(f"blocks.{layer}.hook_attn_out", lambda hook_value, hook : layer_addition_hook(hook_value, hook, task_vector))])
+        if(first_answer_token in logits_to_next_k_tokens(topk, logits, model)):
+            task_vector_correct += 1
+    return 1.0 * task_vector_correct / len(contexts)
+# %%
+
 accuracy = check_accuracy_of_task_vector(last_state_task_vector, 11, last_state)
 print(accuracy)
+# %%
+us_states_capitals = {
+    ' Alabama': ' Montgomery',
+    ' Alaska': ' Juneau',
+    ' Arizona': ' Phoenix',
+    ' Arkansas': ' Little Rock',
+    ' California': ' Sacramento',
+    ' Colorado': ' Denver',
+    ' Connecticut': ' Hartford',
+    ' Delaware': ' Dover',
+    ' Florida': ' Tallahassee',
+    ' Georgia': ' Atlanta',
+    ' Hawaii': ' Honolulu',
+    ' Idaho': ' Boise',
+    ' Illinois': ' Springfield',
+    ' Indiana': ' Indianapolis',
+    ' Iowa': ' Des Moines',
+    ' Kansas': ' Topeka',
+    ' Kentucky': ' Frankfort',
+    ' Louisiana': ' Baton Rouge',
+    ' Maine': ' Augusta',
+    ' Maryland': ' Annapolis',
+    ' Massachusetts': ' Boston',
+    ' Michigan': ' Lansing',
+    ' Minnesota': ' St. Paul',
+    ' Mississippi': ' Jackson',
+    ' Missouri': ' Jefferson City',
+    ' Montana': ' Helena',
+    ' Nebraska': ' Lincoln',
+    ' Nevada': ' Carson City',
+    ' New Hampshire': ' Concord',
+    ' New Jersey': ' Trenton',
+    ' New Mexico': ' Santa Fe',
+    ' New York': ' Albany',
+    ' North Carolina': ' Raleigh',
+    ' North Dakota': ' Bismarck',
+    ' Ohio': ' Columbus',
+    ' Oklahoma': ' Oklahoma City',
+    ' Oregon': ' Salem',
+    ' Pennsylvania': ' Harrisburg',
+    ' Rhode Island': ' Providence',
+    ' South Carolina': ' Columbia',
+    ' South Dakota': ' Pierre',
+    ' Tennessee': ' Nashville',
+    ' Texas': ' Austin',
+    ' Utah': ' Salt Lake City',
+    ' Vermont': ' Montpelier',
+    ' Virginia': ' Richmond',
+    ' Washington': ' Olympia',
+    ' West Virginia': ' Charleston',
+    ' Wisconsin': ' Madison',
+    ' Wyoming': ' Cheyenne'
+}
+
+state_to_capital_task = [(state,us_states_capitals[state]) for state in us_states]
+
+# %%
+state_to_capital_mean_head_activations = generate_mean_activation(state_to_capital_task, ":", num_contexts=2048, len_contexts=5, seperator_token=",")
+# %%
+shuffled_prompts, correct_answers = generate_shuffled_prompts(state_to_capital_task, model, 12, 3, ":",",")
+state_to_capital_causal_indirect_effects = calculate_average_causal_indirect_effect(state_to_capital_mean_head_activations, shuffled_prompts, correct_answers, model)
+px.imshow(state_to_capital_causal_indirect_effects.cpu().numpy())
+# %%
+state_to_capital_task_vector = assemble_task_vector(state_to_capital_mean_head_activations, state_to_capital_causal_indirect_effects, 11, 10)
+
+# %%
+accuracy = check_accuracy_of_task_vector(state_to_capital_task_vector, 11, state_to_capital_task)
+print(f"Base zero-shot accuracy: {accuracy[0]}, Task vector accuracy: {accuracy[1]}")
+# %%
+print(state_to_capital_task)
+model.to_string(model.to_tokens(state_to_capital_task[3][1], prepend_bos=False).tolist()[0][0])
+tokens = t.tensor(mix_multitoken_contexts_and_query(state_to_capital_task[:3], state_to_capital_task[3][0], ":", ",", model))
+print(tokens)
+logits = model.forward(tokens)
+print(logits_to_next_k_tokens(5, logits, model))
+# %%
+for context in state_to_capital_task:
+    prompt = ""
+    prompt += context[0] + ":"
+    print(prompt)
+    logits = model.forward(prompt)
+    print(logits_to_next_k_tokens(5, logits, model=model))
+    logits = model.run_with_hooks(prompt, fwd_hooks = [("blocks.11.hook_attn_out", lambda hook_value, hook : layer_addition_hook(hook_value, hook, last_state_task_vector))])
+    print(logits_to_next_k_tokens(5, logits, model=model))
+# %%
+model = HookedTransformer.from_pretrained("gpt2-small", device=device)
+last_state = assemble_end_list_tasks(us_states, 5000, 5)
+mean_head_activations = generate_mean_activation(last_state, ":", num_contexts=2048, len_contexts=6)
+#%%
+prompts, answers = generate_shuffled_prompts(last_state, model, 32, 6, ":")
+causal_indirect_effect = calculate_average_causal_indirect_effect(mean_head_activations, prompts, answers, model)
+# %%
+number_of_heads_per_batch = 2
+number_of_batches = 64
+task_vectors = t.zeros((model.cfg.n_layers, number_of_batches, model.cfg.d_model), device=device)
+for i in range(model.cfg.n_layers):
+    for j in range(number_of_batches):
+        if((j + 1) * number_of_heads_per_batch < (i+1) * model.cfg.n_heads):
+            task_vectors[i,j,:] = assemble_task_vector(mean_head_activations, causal_indirect_effect, i, (j+1) * number_of_heads_per_batch).detach()
+# %%
+last_state = assemble_end_list_tasks(us_states, 500, 5)
+accuracies = t.zeros((model.cfg.n_layers, number_of_batches), device=device)
+for i in range(model.cfg.n_layers):
+    for j in range(number_of_batches):
+        accuracy = check_accuracy_of_added_task_vector(task_vectors[i,j,:], i, last_state[:100])
+        accuracies[i,j] = accuracy
+        print(f"Layer {i}, {(j+1) * number_of_heads_per_batch} heads task vector accuracy: {accuracy}")
+
+# %%
+accuracy34 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 34).detach(), 7, last_state[:100])
+
+accuracy36 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 36).detach(), 7, last_state[:100])
+accuracy38 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 38).detach(), 7, last_state[:100])
+accuracy40 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 40).detach(), 7, last_state[:100])
+accuracy42 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 42).detach(), 7, last_state[:100])
+print(f"Accuracy with 34 heads: {accuracy34}")
+print(f"Accuracy with 36 heads: {accuracy36}")
+print(f"Accuracy with 38 heads: {accuracy38}")
+print(f"Accuracy with 40 heads: {accuracy40}")
+print(f"Accuracy with 42 heads: {accuracy42}")
+# %%
+accuracy50 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 50).detach(), 7, last_state[:100])  
+print(f"Accuracy with 50 heads: {accuracy50}")
+accuracy60 = check_accuracy_of_added_task_vector(assemble_task_vector(mean_head_activations,causal_indirect_effect, 7, 60).detach(), 7, last_state[:100])
+print(f"Accuracy with 60 heads: {accuracy60}")
+# %%
+for context in last_state[:5]:
+    prompt = ""
+    prompt += context[0] + ":"
+    print(prompt)
+    logits = model.forward(prompt)
+    print(logits_to_next_k_tokens(5, logits, model=model))
+    logits = model.run_with_hooks(prompt, fwd_hooks = [(f"blocks.{7}.hook_attn_out", lambda hook_value, hook : layer_addition_hook(hook_value, hook, task_vectors[7,4,:]))])
+    print(logits_to_next_k_tokens(5, logits, model=model))
 # %%
